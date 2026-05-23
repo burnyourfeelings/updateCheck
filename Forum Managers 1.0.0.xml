@@ -1,0 +1,358 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin name="Forum Managers" version_long="10000" version_human="1.0.0" author="Sebastian C." website="https://steamcommunity.com/id/imburny/" update_check=""><hooks><hook type="C" class="\IPS\core\modules\admin\members\groups" filename="forumManagerSettings"><![CDATA[//<?php
+
+if ( !\defined( '\IPS\SUITE_UNIQUE_KEY' ) )
+{
+	exit;
+}
+
+/**
+ * @mixin \IPS\core\modules\admin\members\groups
+ */
+class hook2 extends _HOOK_CLASS_
+{
+	public function manage()
+	{
+		try
+		{
+			\IPS\Output::i()->sidebar['actions']['forummanagers'] = [
+				'title'  => 'Forum Managers',
+				'icon'   => 'cog',
+				'link'   => \IPS\Http\Url::internal( 'app=core&module=members&controller=groups&do=forumManagers' ),
+			];
+	
+			parent::manage();
+		}
+		catch ( \Error | \RuntimeException $e )
+		{
+			if( \defined( '\IPS\DEBUG_HOOKS' ) AND \IPS\DEBUG_HOOKS )
+			{
+				\IPS\Log::log( $e, 'hook_exception' );
+			}
+
+			if ( method_exists( get_parent_class(), __FUNCTION__ ) )
+			{
+				return \call_user_func_array( 'parent::' . __FUNCTION__, \func_get_args() );
+			}
+			else
+			{
+				throw $e;
+			}
+		}
+	}
+
+	public function forumManagers()
+	{
+		try
+		{
+			\IPS\Dispatcher::i()->checkAcpPermission( 'groups_manage' );
+	
+		// Adaugă language string pentru label
+			\IPS\Member::loggedIn()->language()->words['forummanagers_groups'] = 'Groups with Forum Manager access';
+			\IPS\Member::loggedIn()->language()->words['forummanagers_groups_desc'] = 'Users in the selected groups who are also moderators on a forum will see the "Edit Forum" button.';
+	
+			$form = new \IPS\Helpers\Form;
+	
+			$groups = [];
+			foreach ( \IPS\Member\Group::groups() as $k => $v )
+			{
+				$groups[ $k ] = $v->name;
+			}
+	
+			$selected = array_filter( explode( ',', \IPS\Settings::i()->forummanagers_groups ) );
+	
+			$form->add( new \IPS\Helpers\Form\CheckboxSet(
+				'forummanagers_groups',
+				$selected,
+				FALSE,
+				[
+					'options'  => $groups,
+					'multiple' => TRUE
+				]
+			) );
+	
+			if ( $values = $form->values() )
+			{
+				\IPS\Settings::i()->changeValues( [
+					'forummanagers_groups' => implode( ',', $values['forummanagers_groups'] )
+				] );
+	
+				\IPS\Output::i()->redirect(
+					\IPS\Http\Url::internal( 'app=core&module=members&controller=groups&do=forumManagers' ),
+					'saved'
+				);
+			}
+	
+			\IPS\Output::i()->title  = 'Forum Managers';
+			\IPS\Output::i()->output = (string) $form;
+		}
+		catch ( \Error | \RuntimeException $e )
+		{
+			if( \defined( '\IPS\DEBUG_HOOKS' ) AND \IPS\DEBUG_HOOKS )
+			{
+				\IPS\Log::log( $e, 'hook_exception' );
+			}
+
+			if ( method_exists( get_parent_class(), __FUNCTION__ ) )
+			{
+				return \call_user_func_array( 'parent::' . __FUNCTION__, \func_get_args() );
+			}
+			else
+			{
+				throw $e;
+			}
+		}
+	}
+}]]></hook><hook type="C" class="\IPS\forums\modules\front\forums\forums" filename="forumEdit"><![CDATA[//<?php
+
+if ( !\defined( '\IPS\SUITE_UNIQUE_KEY' ) )
+{
+	exit;
+}
+
+/**
+ * @mixin \IPS\forums\modules\front\forums\forums
+ */
+class hook3 extends _HOOK_CLASS_
+{
+	protected static $fm_shown = FALSE;
+
+	public function execute()
+	{
+		try
+		{
+			parent::execute();
+	
+			if ( static::$fm_shown )
+			{
+				return;
+			}
+	
+			$member = \IPS\Member::loggedIn();
+	
+			if ( !$member->member_id )
+			{
+				return;
+			}
+	
+			$allowedGroups = array_filter( explode( ',', \IPS\Settings::i()->forummanagers_groups ) );
+			$memberGroups = array_merge(
+				[ (string) $member->member_group_id ],
+				array_filter( explode( ',', $member->mgroup_others ) )
+			);
+	
+			if ( empty( $allowedGroups ) || !array_intersect( $allowedGroups, $memberGroups ) )
+			{
+				return;
+			}
+	
+			try
+			{
+				$forum = \IPS\forums\Forum::loadAndCheckPerms( \IPS\Request::i()->id );
+			}
+			catch( \Exception $e )
+			{
+				return;
+			}
+	
+			$isModerator = FALSE;
+	
+			try
+			{
+				$mods = \IPS\Db::i()->select( '*', 'core_moderators' );
+				foreach ( $mods as $mod )
+				{
+					$perms = json_decode( $mod['perms'], TRUE );
+					if ( !is_array( $perms ) ) continue;
+	
+					$forums = isset( $perms['forums'] ) ? $perms['forums'] : [];
+					$hasForumAccess = ( $forums === '*' ) || ( is_array( $forums ) && isset( $forums[ (string) $forum->id ] ) );
+	
+					if ( !$hasForumAccess ) continue;
+	
+					if ( $mod['type'] === 'm' && (int) $mod['id'] === $member->member_id )
+					{
+						$isModerator = TRUE;
+						break;
+					}
+					if ( $mod['type'] === 'g' && in_array( (string) $mod['id'], $memberGroups ) )
+					{
+						$isModerator = TRUE;
+						break;
+					}
+				}
+			}
+			catch( \Exception $e )
+			{
+				return;
+			}
+	
+			if ( !$isModerator )
+			{
+				return;
+			}
+	
+			static::$fm_shown = TRUE;
+			\IPS\Output::i()->output .= $this->_buildHtml( $forum );
+		}
+		catch ( \Error | \RuntimeException $e )
+		{
+			if( \defined( '\IPS\DEBUG_HOOKS' ) AND \IPS\DEBUG_HOOKS )
+			{
+				\IPS\Log::log( $e, 'hook_exception' );
+			}
+
+			if ( method_exists( get_parent_class(), __FUNCTION__ ) )
+			{
+				return \call_user_func_array( 'parent::' . __FUNCTION__, \func_get_args() );
+			}
+			else
+			{
+				throw $e;
+			}
+		}
+	}
+
+	public function editForumDialog()
+	{
+		try
+		{
+			$member = \IPS\Member::loggedIn();
+	
+			if ( !$member->member_id )
+			{
+				\IPS\Output::i()->error( 'no_permission', '2F173/1', 403 );
+			}
+	
+			try
+			{
+				$forum = \IPS\forums\Forum::loadAndCheckPerms( \IPS\Request::i()->id );
+			}
+			catch( \Exception $e )
+			{
+				\IPS\Output::i()->error( 'node_error', '2F173/2', 404 );
+			}
+	
+			$forumId = $forum->id;
+			$name    = (string) $forum->_title;
+	
+			$form = new \IPS\Helpers\Form( 'form', 'save' );
+			$form->class = 'ipsForm_vertical ipsPad ipsType_normal';
+	
+			$form->add( new \IPS\Helpers\Form\Translatable( 'forum_name', NULL, TRUE, [
+				'app' => 'forums',
+				'key' => "forums_forum_{$forumId}"
+			] ) );
+	
+			$form->add( new \IPS\Helpers\Form\Translatable( 'forum_description', NULL, FALSE, [
+				'app'    => 'forums',
+				'key'    => "forums_forum_{$forumId}_desc",
+				'editor' => [
+					'app'         => 'forums',
+					'key'         => 'Forums',
+					'autoSaveKey' => "forums-forum-{$forumId}",
+					'attachIds'   => [ $forumId, NULL, 'description' ],
+					'minimize'    => 'forum_description_placeholder'
+				]
+			] ) );
+	
+			if ( $values = $form->values() )
+			{
+				\IPS\Lang::saveCustom( 'forums', "forums_forum_{$forumId}", $values['forum_name'] );
+				\IPS\Lang::saveCustom( 'forums', "forums_forum_{$forumId}_desc", $values['forum_description'] );
+	
+				$forum->save();
+	
+				unset( \IPS\Data\Store::i()->forumsCustomNodes );
+	
+				\IPS\Output::i()->redirect( \IPS\Http\Url::internal( "app=forums&module=forums&controller=forums&id={$forumId}", 'front' ) );
+			}
+	
+			if ( \IPS\Request::i()->isAjax() )
+			{
+				\IPS\Output::i()->sendOutput( (string) $form, 200, 'text/html' );
+			}
+	
+			\IPS\Output::i()->title = 'Edit Forum: ' . $name;
+			\IPS\Output::i()->output = (string) $form;
+		}
+		catch ( \Error | \RuntimeException $e )
+		{
+			if( \defined( '\IPS\DEBUG_HOOKS' ) AND \IPS\DEBUG_HOOKS )
+			{
+				\IPS\Log::log( $e, 'hook_exception' );
+			}
+
+			if ( method_exists( get_parent_class(), __FUNCTION__ ) )
+			{
+				return \call_user_func_array( 'parent::' . __FUNCTION__, \func_get_args() );
+			}
+			else
+			{
+				throw $e;
+			}
+		}
+	}
+
+	protected function _buildHtml( $forum )
+	{
+		try
+		{
+			$forumId   = $forum->id;
+			$name      = htmlspecialchars( (string) $forum->_title, ENT_QUOTES );
+			$baseUrl   = \IPS\Settings::i()->base_url;
+			$dialogUrl = rtrim( $baseUrl, '/' ) . '/index.php?app=forums&module=forums&controller=forums&do=editForumDialog&id=' . $forumId;
+	
+			return <<<HTML
+<a href="{$dialogUrl}" class="ipsButton ipsButton_normal" data-ipsdialog data-ipsdialog-title="Edit Forum: {$name}" data-ipsdialog-size="medium" data-ipsdialog-destructonclose="false" style="margin-top:10px;">
+	<i class="fa fa-pencil"></i> Edit Forum
+</a>
+HTML;
+		}
+		catch ( \Error | \RuntimeException $e )
+		{
+			if( \defined( '\IPS\DEBUG_HOOKS' ) AND \IPS\DEBUG_HOOKS )
+			{
+				\IPS\Log::log( $e, 'hook_exception' );
+			}
+
+			if ( method_exists( get_parent_class(), __FUNCTION__ ) )
+			{
+				return \call_user_func_array( 'parent::' . __FUNCTION__, \func_get_args() );
+			}
+			else
+			{
+				throw $e;
+			}
+		}
+	}
+}]]></hook></hooks><settings><setting><key>forummanagers_groups</key><default/></setting></settings><htmlFiles/><cssFiles/><jsFiles/><resourcesFiles/><lang/><versions><version long="10000" human="1.0.0"><![CDATA[//<?php
+
+
+/* To prevent PHP errors (extending class does not exist) revealing path */
+if ( !\defined( '\IPS\SUITE_UNIQUE_KEY' ) )
+{
+	header( ( isset( $_SERVER['SERVER_PROTOCOL'] ) ? $_SERVER['SERVER_PROTOCOL'] : 'HTTP/1.0' ) . ' 403 Forbidden' );
+	exit;
+}
+
+/**
+ * Install Code
+ */
+class ips_plugins_setup_install
+{
+	/**
+	 * ...
+	 *
+	 * @return	array	If returns TRUE, upgrader will proceed to next step. If it returns any other value, it will set this as the value of the 'extra' GET parameter and rerun this step (useful for loops)
+	 */
+	public function step1()
+	{
+		
+
+		return TRUE;
+	}
+	
+	// You can create as many additional methods (step2, step3, etc.) as is necessary.
+	// Each step will be executed in a new HTTP request
+}]]></version></versions></plugin>
